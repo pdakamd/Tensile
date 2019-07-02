@@ -156,11 +156,13 @@ def writeRunScript(path, libraryLogicPath, forBenchmark):
   if forBenchmark:
     # for benchmark client
     runScriptFile.write(" -DTensile_CLIENT_BENCHMARK=ON")
+    runScriptFile.write(" -Dx1BNConvFusionEnable=ON")
   else:
     # for library client
     runScriptFile.write(" -DTensile_ROOT=%s" \
         % os.path.join(globalParameters["ScriptPath"], "bin") )
     runScriptFile.write(" -DTensile_CLIENT_BENCHMARK=OFF")
+    runScriptFile.write(" -x1BNConvFusionEnable=ON")
     runScriptFile.write(" -DTensile_LOGIC_PATH=%s" % libraryLogicPath)
     runScriptFile.write(" -DTensile_LIBRARY_PRINT_DEBUG=%s" \
         % ("ON" if globalParameters["LibraryPrintDebug"] else "OFF"))
@@ -191,9 +193,9 @@ def writeRunScript(path, libraryLogicPath, forBenchmark):
           "client.exe") )
     else:
       if globalParameters["PinClocks"] and globalParameters["ROCmSMIPath"]:
-        runScriptFile.write("%s -d 0 --setfan 255 --setsclk 7\n" % globalParameters["ROCmSMIPath"])
-        runScriptFile.write("sleep 1\n")
-        runScriptFile.write("%s -d 0 -a\n" % globalParameters["ROCmSMIPath"])
+        runScriptFile.write("#%s -d 0 --setfan 255 --setsclk 7\n" % globalParameters["ROCmSMIPath"])
+        runScriptFile.write("#sleep 1\n")
+        runScriptFile.write("#%s -d 0 -a\n" % globalParameters["ROCmSMIPath"])
       runScriptFile.write("./client")
 
     if globalParameters["DataInitTypeA"] == -1 :
@@ -227,8 +229,8 @@ def writeRunScript(path, libraryLogicPath, forBenchmark):
     runScriptFile.write("ERR=$?\n")
     if os.name != "nt":
       if globalParameters["PinClocks"] and globalParameters["ROCmSMIPath"]:
-        runScriptFile.write("%s -d 0 --resetclocks\n" % globalParameters["ROCmSMIPath"])
-        runScriptFile.write("%s -d 0 --setfan 50\n" % globalParameters["ROCmSMIPath"])
+        runScriptFile.write("#%s -d 0 --resetclocks\n" % globalParameters["ROCmSMIPath"])
+        runScriptFile.write("#%s -d 0 --setfan 50\n" % globalParameters["ROCmSMIPath"])
   else:
     executablePath = os.path.join(globalParameters["WorkingPath"])
     if os.name == "nt":
@@ -712,6 +714,9 @@ def writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
   h += "void *deviceC;\n"
   h += "void *deviceA;\n"
   h += "void *deviceB;\n"
+  if (kernel["x1BNConvFusionEnable"] > 0):  
+    h += "void *devicemean;\n"
+    h += "void *devicevariance;\n"
 
   ##############################################################################
   # Benchmarking and Validation Parameters
@@ -930,7 +935,11 @@ def writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
       typeName = dataTypes[0].toCpp()
       destTypeName = destDataTypes[dataType].toCpp()
       computeTypeName = computeDataTypes[dataType].toCpp()
-      h += "  return f(solutionLock, static_cast<%s *>(deviceD), static_cast<%s *>(deviceC), static_cast<%s *>(deviceA), static_cast<%s *>(deviceB),\n" \
+      if kernel["x1BNConvFusionEnable"] > 0:
+        h += "  return f(solutionLock, static_cast<%s *>(deviceD), static_cast<%s *>(deviceC), static_cast<%s *>(deviceA), static_cast<%s *>(deviceB),static_cast<float *>(devicemean), static_cast<float *>(devicevariance),\n" \
+            % (destTypeName, destTypeName, typeName, typeName)
+      else:  
+        h += "  return f(solutionLock, static_cast<%s *>(deviceD), static_cast<%s *>(deviceC), static_cast<%s *>(deviceA), static_cast<%s *>(deviceB),\n" \
           % (destTypeName, destTypeName, typeName, typeName)
     h += "      alpha,\n"
     if problemType["UseBeta"]:
@@ -1094,6 +1103,9 @@ def writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
               h += "        static_cast<%s *>(deviceC),\n" % destTypeName
               h += "        static_cast<%s *>(deviceA),\n" % typeName
               h += "        static_cast<%s *>(deviceB),\n" % typeName
+              if kernel["x1BNConvFusionEnable"] > 0:
+                h += "        static_cast<float *>(devicemean),\n" 
+                h += "        static_cast<float *>(devicevariance),\n" 
             h += "        alpha,\n"
             if problemType["UseBeta"]:
               h += "        beta,\n"

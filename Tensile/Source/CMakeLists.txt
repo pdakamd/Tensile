@@ -45,6 +45,7 @@ if(Tensile_CLIENT_BENCHMARK)
     ${TensileClient_KERNELS} )
   target_compile_definitions( ${ClientName} PUBLIC 
     -DTensile_CLIENT_BENCHMARK=1
+    -Dx1BNConvFusionEnable=1
     -DTensile_CLIENT_LIBRARY=0 )
   foreach( target ${Tensile_ISA} )
     target_link_libraries( ${ClientName} PRIVATE --amdgpu-target=${target} )

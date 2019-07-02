@@ -132,7 +132,10 @@ class SolutionWriter:
       s += "%suint64_t tensor2dSizeC;\n" % t
       s += "%suint64_t tensor2dSizeA;\n" % t
       s += "%suint64_t tensor2dSizeB;\n" % t
-      solutionArgs = self.getArgList(problemType, False, True, False, False)
+      if kernel["x1BNConvFusionEnable"] > 0:
+        solutionArgs = self.getArgList(problemType, False, True, False, False, kernel)
+      else:
+        solutionArgs = self.getArgList(problemType, False, True, False, False)
       for arg in solutionArgs:
         if arg[0] == "TensileHalf":
           s += "%s%s %s[2];\n" % (t, arg[0], arg[1])
@@ -731,6 +734,9 @@ class SolutionWriter:
           s += "%shipFunctionArgs.dataC = dataC;\n" % (t)
           s += "%shipFunctionArgs.dataA = dataA;\n" % (t)
           s += "%shipFunctionArgs.dataB = dataB;\n" % (t)
+          if kernel["x1BNConvFusionEnable"] > 0:
+            s += "%shipFunctionArgs.datamean = datamean;\n" % (t)
+            s += "%shipFunctionArgs.datavariance = datavariance;\n" % (t)
 
           if problemType["DataType"].isHalf():
             s += "%shipFunctionArgs.alpha[0] = alpha;\n" % (t)
@@ -882,7 +888,7 @@ class SolutionWriter:
   ########################################
   # get solution arguments
   # includeData adds launch-time info including data pointers and solution index
-  def getArgList(self, problemType, includeSolutionInfo, includeData, includeEvents, includeStream):
+  def getArgList(self, problemType, includeSolutionInfo, includeData, includeEvents, includeStream, kernel = None):
     self.strideList = []
     self.sizeList = []
     argList = []
@@ -902,6 +908,10 @@ class SolutionWriter:
         argList.append(("const %s *"%destTypeName, "dataC"))
         argList.append(("const %s *"%typeName, "dataA"))
         argList.append(("const %s *"%typeName, "dataB"))
+        if kernel:
+          if kernel["x1BNConvFusionEnable"] > 0:
+            argList.append(("float *", "datamean")) 
+            argList.append(("float *", "datavariance"))
       else:
         argList.append(("cl_mem", "dataD"))
         argList.append(("cl_mem", "dataC"))
@@ -955,7 +965,9 @@ class SolutionWriter:
     solutionName = self.getSolutionName(solution)
     s += "%s%s %s(\n" % (t, self.statusName, solutionName)
     t += "    "
-    argList = self.getArgList(solution["ProblemType"], True, True, True, True)
+    kernels = solution.getKernels()
+    kernel = kernels[0]
+    argList = self.getArgList(solution["ProblemType"], True, True, True, True, kernel)
     for i in range(0, len(argList)):
       argString = "%s %s" % argList[i]
       s += "%s%s%s" % (t, argString, ",\n" if i < len(argList)-1 else ")" )

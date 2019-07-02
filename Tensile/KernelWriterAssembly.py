@@ -1074,6 +1074,11 @@ class KernelWriterAssembly(KernelWriter):
     # num vgprs: valu
 #jgolds bpeCinternal because we are allocating accumulation registers here
     self.numVgprValuC = (kernel["ThreadTile0"]*kernel["ThreadTile1"]*self.bpeCinternal)//self.bpr
+    # For 1x1 Conv-BN Fusion kernel
+    if kernel["x1BNConvFusionEnable"] > 0:
+      self.numVgprValumean = kernel["ThreadTile1"]
+      self.numVgprValuvariance = kernel["ThreadTile1"]
+      self.numVgprValubcast = 2
 
     valuBlocks = (1+kernel["PrefetchLocalRead"]) * kernel["InnerUnroll"]
     self.numVgprValuAPerBlock = kernel["ThreadTileA"]*tPA["bpe"]//self.bpr
@@ -1160,12 +1165,17 @@ class KernelWriterAssembly(KernelWriter):
 
 
     self.startVgprValuC = vgprIdx; vgprIdx += self.numVgprValuC
+    if kernel["x1BNConvFusionEnable"] > 0:
+      self.startVgprValumean = vgprIdx; vgprIdx += self.numVgprValumean
+      self.startVgprValuvariance = vgprIdx; vgprIdx += self.numVgprValuvariance
+      #Reserve VGPR for broadcast address
+      self.startVgprValubcast = vgprIdx; vgprIdx += self.numVgprValubcast
 
 
     self.startVgprValuA = vgprIdx; vgprIdx += numVgprValuA
+    
 
-
-
+    
     valuBlocks = (1+kernel["PrefetchLocalRead"]) * kernel["InnerUnroll"]
     if not kernel["DirectToLdsA"] or self.do["KeepDirectToLdsAlloc"]:
       if kernel["PrefetchGlobalRead"]:
@@ -1264,6 +1274,9 @@ class KernelWriterAssembly(KernelWriter):
     numSgprAddressC = self.rpga # til end
     numSgprAddressA = self.rpga # til read offsets
     numSgprAddressB = self.rpga # til read offsets
+    if kernel["x1BNConvFusionEnable"] > 0:
+      numSgprAddressmean = self.rpga
+      numSgprAddressvariance = self.rpga
     numSgprAlpha = max(1,int(tPA["bpe"]/4))
     numSgprBeta  = max(1,int(self.bpeCexternal/4)) if kernel["ProblemType"]["UseBeta"] else 0
     self.numSgprStridesD = kernel["ProblemType"]["NumIndicesC"]
@@ -1324,6 +1337,9 @@ class KernelWriterAssembly(KernelWriter):
     if kernel["BufferStore"]:
       self.defineSgpr("SrdD", 4, 4)
       self.defineSgpr("SrdC", 4, 4)
+      if kernel["x1BNConvFusionEnable"] > 0:
+        self.defineSgpr("Srdmean", 4, 4)
+        self.defineSgpr("Srdvariance", 4, 4)
 
     self.defineSgpr("Tensor2dSizeC", 2,2)
     self.defineSgpr("Tensor2dSizeA", 2,2)
@@ -1372,6 +1388,9 @@ class KernelWriterAssembly(KernelWriter):
     self.defineSgpr("StridesB", self.numSgprStridesB)
     self.defineSgpr("AddressA", numSgprAddressA)
     self.defineSgpr("AddressB", numSgprAddressB)
+    if kernel["x1BNConvFusionEnable"] > 0:
+      self.defineSgpr("Addressmean", numSgprAddressmean)
+      self.defineSgpr("Addressvariance", numSgprAddressvariance)
     if globalParameters["DebugKernel"]:
       self.defineSgpr("AddressDbg", self.numSgprAddressDbg)
       self.defineSgpr("DebugKernelItems", 1)
@@ -1427,7 +1446,7 @@ class KernelWriterAssembly(KernelWriter):
     # TODO-persistent - likely recompute some of the registers above.
     if kernel["PersistentKernel"]:
       self.lastPostLoopSgpr = self.sgprIdx
-
+    
     self.totalSgprs = self.sgprIdx
     self.setStartTmpPool(self.totalSgprs)
     ########################################
@@ -2137,8 +2156,64 @@ class KernelWriterAssembly(KernelWriter):
         kStr += "    v_add_u32 \dst, vcc, \src0, \src1" + self.endLine
       kStr += "    v_lshlrev_b32 \dst, \shiftCnt, \dst" + self.endLine
     kStr += ".endm" + self.endLine
-
-
+    if kernel["x1BNConvFusionEnable"] > 0:
+      # Custom DPP reduction macro
+      kStr += ".macro dpp_interleaved_reduction%s src0, src1" %(kernel["ThreadTile0"]) + self.endLine
+      kStr += "    s_nop 4" + self.endLine                                                                                 
+      kStr += "    v_add_f32 \src0, \src0, \src0 row_shr:1 bound_ctrl:0" +self.endLine                                       
+      kStr += "    v_add_f32 \src1, \src1, \src1 row_shr:1 bound_ctrl:0" +self.endLine                                                               
+      if kernel["ThreadTile0"] > 2:
+        kStr += "    s_nop 0"                                            +self.endLine                    
+        kStr += "    v_add_f32 \src0, \src0, \src0 row_shr:2 bound_ctrl:0" +self.endLine                                            
+        kStr += "    v_add_f32 \src1, \src0, \src1 row_shr:2 bound_ctrl:0" +self.endLine                                            
+        if kernel["ThreadTile0"] > 4:
+          kStr += "    s_nop 0"                                            +self.endLine                    
+          kStr += "    v_add_f32 \src0, \src0, \src0 row_shr:4 bank_mask:0xe"+self.endLine                                            
+          kStr += "    v_add_f32 \src1, \src1, \src1 row_shr:4 bank_mask:0xe"+self.endLine                                            
+          if kernel["ThreadTile0"] > 8:
+            kStr += "    s_nop 0"                                            +self.endLine                    
+            kStr += "    v_add_f32 \src0, \src0, \src0 row_shr:8 bank_mask:0xc"+self.endLine                                            
+            kStr += "    v_add_f32 \src1, \src1, \src1 row_shr:8 bank_mask:0xc"+self.endLine                                            
+            if kernel["ThreadTile0"] > 16:
+              kStr += "    v_add_f32 \src0, \src0, \src0 row_bcast:15 row_mask:0xa"+self.endLine
+              kStr += "    v_add_f32 \src1, \src1, \src1 row_bcast:15 row_mask:0xa"+self.endLine
+              kStr += "    s_nop 0"                                             +self.endLine
+              if kernel["ThreadTile0"] > 32:
+                kStr += "    v_add_f32 \src0, \src0, \src0 row_bcast:31 row_mask:0xc"+self.endLine
+                kStr += "    v_add_f32 \src1, \src1, \src1 row_bcast:31 row_mask:0xc"+self.endLine
+                kStr += "    s_nop 0"                                             +self.endLine
+      kStr += "    s_nop 0" + self.endLine
+      kStr += ".endm" + self.endLine
+      
+      # Broadcast value
+      kStr += ".macro broadcast%s src0, src1" %(kernel["ThreadTile0"]) + self.endLine
+      kStr += "    s_nop 4" + self.endLine                                                                                 
+      kStr += "    v_or_b32 \src0, \src0, \src0 row_shr:1 bound_ctrl:0" +self.endLine                                       
+      kStr += "    v_or_b32 \src1, \src1, \src1 row_shr:1 bound_ctrl:0" +self.endLine                                                               
+      kStr += "    s_nop 0"                                            +self.endLine                    
+      if kernel["ThreadTile0"] > 2:
+        kStr += "    v_or_b32 \src0, \src0, \src0 row_shr:2 bound_ctrl:0" +self.endLine                                            
+        kStr += "    v_or_b32 \src1, \src0, \src1 row_shr:2 bound_ctrl:0" +self.endLine                                            
+        kStr += "    s_nop 0"                                            +self.endLine                    
+        if kernel["ThreadTile0"] > 4:
+          kStr += "    v_or_b32 \src0, \src0, \src0 row_shr:4 bank_mask:0xe"+self.endLine                                            
+          kStr += "    v_or_b32 \src1, \src1, \src1 row_shr:4 bank_mask:0xe"+self.endLine                                            
+          kStr += "    s_nop 0"                                            +self.endLine                    
+          if kernel["ThreadTile0"] > 8:
+            kStr += "    v_or_b32 \src0, \src0, \src0 row_shr:8 bank_mask:0xc"+self.endLine                                            
+            kStr += "    v_or_b32 \src1, \src1, \src1 row_shr:8 bank_mask:0xc"+self.endLine                                            
+            kStr += "    s_nop 0" + self.endLine                                              +self.endLine                  
+            if kernel["ThreadTile0"] > 16:
+              kStr += "    v_or_b32 \src0, \src0, \src0 row_bcast:15 row_mask:0xa"+self.endLine
+              kStr += "    v_or_b32 \src1, \src1, \src1 row_bcast:15 row_mask:0xa"+self.endLine
+              kStr += "    s_nop 0"                                             +self.endLine
+              if kernel["ThreadTile0"] > 32:
+                kStr += "    v_or_b32 \src0, \src0, \src0 row_bcast:31 row_mask:0xc"+self.endLine
+                kStr += "    v_or_b32 \src1, \src1, \src1 row_bcast:31 row_mask:0xc"+self.endLine
+                kStr += "    s_nop 0"                                             +self.endLine
+      kStr += "    s_nop 0" + self.endLine
+      kStr += ".endm" + self.endLine
+      
     # Use combined shift+add, where available:
     kStr += ".macro _v_lshl_add_u32 dst, src0, src1, shiftCnt" + self.endLine
     if globalParameters["AsmCaps"][self.version]["HasAddLshl"]:
@@ -2168,7 +2243,11 @@ class KernelWriterAssembly(KernelWriter):
     ########################################
     kStr += self.comment3("VGPR Assignments")
     kStr += self.macroRegister("vgprValuC", self.startVgprValuC)
-
+    
+    if kernel["x1BNConvFusionEnable"] > 0:
+      kStr += self.macroRegister("vgprValumean", self.startVgprValumean)
+      kStr += self.macroRegister("vgprValuvariance", self.startVgprValuvariance)
+      kStr += self.macroRegister("vgprValubase", self.startVgprValubcast)  
     kStr += self.comment1("ValuA/B   Xn=PLR buffer idx,  In=InnerUnroll idx")
     ri = 0
     for bi in range(0,kernel["PrefetchLocalRead"]+1): # buffer indicies
@@ -2541,7 +2620,7 @@ class KernelWriterAssembly(KernelWriter):
       kStr += self.getKernArg("Tensor2dSizeA+1")
       kStr += self.getKernArg("Tensor2dSizeB+0")
       kStr += self.getKernArg("Tensor2dSizeB+1")
-
+      
       kStr += self.getKernArg("AddressD")
       kStr += self.getKernArg("AddressD+1")
       kStr += self.getKernArg("AddressC")
@@ -2551,6 +2630,12 @@ class KernelWriterAssembly(KernelWriter):
       kStr += self.getKernArg("AddressB")
       kStr += self.getKernArg("AddressB+1")
 
+      if kernel["x1BNConvFusionEnable"] > 0:
+        kStr += self.getKernArg("Addressmean")
+        kStr += self.getKernArg("Addressmean+1")
+        kStr += self.getKernArg("Addressvariance")
+        kStr += self.getKernArg("Addressvariance+1")
+      
       # for half precision or smaller, data is padded to fill up 32-bits
       if kernel["ProblemType"]["DataType"].isHalf() or \
          kernel["ProblemType"]["DataType"].isSingle() or \
@@ -6161,6 +6246,16 @@ class KernelWriterAssembly(KernelWriter):
     kStr += inst("s_mov_b32", sgpr("Srd%s+1"%ch), sgpr("Address%s+1"%ch), "init SRD base address (upper) + other fields" )
     kStr += inst("s_mov_b32", sgpr("Srd%s+2"%ch), hex(0x80000000), "")
     kStr += inst("s_mov_b32", sgpr("Srd%s+3"%ch), "Srd127_96", "Set bits 127_96 in SRD")
+    if kernel["x1BNConvFusionEnable"] > 0:
+      kStr += inst("s_mov_b32", sgpr("Srdmean+0"), sgpr("Addressmean+0"), "init mean base address (lower)" )
+      kStr += inst("s_mov_b32", sgpr("Srdmean+1"), sgpr("Addressmean+1"), "init mean base address (upper) + other fields" )
+      kStr += inst("s_mov_b32", sgpr("Srdmean+2"), hex(0x80000000), "")
+      kStr += inst("s_mov_b32", sgpr("Srdmean+3"), "Srd127_96", "Set bits 127_96 in SRD")
+      kStr += inst("s_mov_b32", sgpr("Srdvariance+0"), sgpr("Addressvariance+0"), "init variance base address (lower)" )
+      kStr += inst("s_mov_b32", sgpr("Srdvariance+1"), sgpr("Addressvariance+1"), "init variance base address (upper) + other fields" )
+      kStr += inst("s_mov_b32", sgpr("Srdvariance+2"), hex(0x80000000), "")
+      kStr += inst("s_mov_b32", sgpr("Srdvariance+3"), "Srd127_96", "Set bits 127_96 in SRD")
+      
     kStr += "\n"
     return kStr
 
@@ -6422,7 +6517,11 @@ class KernelWriterAssembly(KernelWriter):
       if not beta:
         betaLabel = self.getLabelNum("GW_Beta")
     endLabel = self.getLabelNum("GW_End")
-
+    
+    if kernel["x1BNConvFusionEnable"] > 0:
+      # TODO: Check if customLabel is required
+      customLabel = self.getLabelNum("GW_custom")
+      x1BNConvFusionLabel = self.getLabelNum("GW_x1BNConvFusion")
     # Layout
     """
     if B1 goto label_B1
@@ -6561,7 +6660,11 @@ class KernelWriterAssembly(KernelWriter):
         kStr += inst("s_cmpk_gt_u32", sgpr(tmpS01), hex(0), "rMT1 > 0")
         kStr += inst("s_cbranch_scc1 label_%04u" % writeLabels[beta][True], \
             "edges required so jump to E1")
-
+      
+      if kernel["x1BNConvFusionEnable"] > 0:
+        meanVgprglobal = self.startVgprValumean
+        varianceVgprglobal = self.startVgprValuvariance
+        bcastVgpr = self.startVgprValubcast
       # by now we either jumped to E1 or stayed at E0
       for edge in edges:
         kStr += "label_%04u:%s"%(writeLabels[beta][edge], self.endLine)
@@ -6747,17 +6850,181 @@ class KernelWriterAssembly(KernelWriter):
           #print("BATCH[%u/%u]: elements[edgeI][%u:%u] VGPRs=%u" % (batchIdx, numBatches, elementStartIdx, elementStopIdx,numVgprsPerElement ))
           # elementVgprs can be large and should be perfectly tuned to the number of available
           # VGPRS.  We do not want to accidentally overflow and grow the pool here:
-
-          kStr += self.globalWriteBatch(kernel, batchIdx, beta, edge, optStoreAddrVgpr, lsu, atomic, gwvw, atomicW, \
+          if kernel["x1BNConvFusionEnable"] > 0:
+            kStr += self.globalWriteBatch(kernel, batchIdx, beta, edge, optStoreAddrVgpr, lsu, atomic, gwvw, atomicW, \
+                elementsThisBatch, self.coord0, self.coord1, self.addrD, self.addrC, \
+                numVgprsPerAddr, numVgprsPerDataPerVI, halfDataRegPerVI, tmpVgpr, \
+                elementSgprs, numSgprsPerElement, tmpSgpr, meanVgprglobal, varianceVgprglobal, bcastVgpr, customLabel)
+          else:
+            kStr += self.globalWriteBatch(kernel, batchIdx, beta, edge, optStoreAddrVgpr, lsu, atomic, gwvw, atomicW, \
               elementsThisBatch, self.coord0, self.coord1, self.addrD, self.addrC, \
               numVgprsPerAddr, numVgprsPerDataPerVI, halfDataRegPerVI, tmpVgpr, \
               elementSgprs, numSgprsPerElement, tmpSgpr)
 
+          if kernel["x1BNConvFusionEnable"] > 0:
+            kStr += self.BN_reduction(kernel, beta, edge, lsu, elementsThisBatch, meanVgprglobal, varianceVgprglobal)
+        if edge == 0:
+          if kernel["x1BNConvFusionEnable"] > 0:
+            for rpv in range(0, kernel["ThreadTile1"]):
+              kStr += inst("dpp_interleaved_reduction%s"%(kernel["ThreadTile0"]), \
+                  vgpr(meanVgprglobal+rpv),\
+                  vgpr(varianceVgprglobal+rpv),\
+                  "Reduction across dim0 of ThreadTile")
+            AddrSrdMean = sgpr("Srdmean", 4)
+            AddrSrdVariance = sgpr("Srdvariance", 4)
+            #TODO: Simplify the below code
+            extraFields = ""
+            unusedVgpr = self.vgprPool.checkOut(4,"For dummy broadcast")
+            kStr += inst("broadcast16", \
+                vgpr(bcastVgpr),\
+                vgpr(unusedVgpr),\
+                "Broadcast the address to required threads")
+            self.vgprPool.checkIn(unusedVgpr)
+            #TODO: Determine whether tmpSgpr2 is required
+            tmpSgpr2 = self.getTmpSgpr(1)
+            #TODO: Determine whether tmpVgpr2 is required
+            tmpVgpr2 = self.vgprPool.checkOut(4,"For BN reduction")
+            #TODO: Determine whether tmpVgpr_rewrite_old is required
+            #tmpVgpr_rewrite_old = self.vgprPool.checkOut(7,"For rewrite")
+            tmpVgprBNreduction = self.vgprPool.checkOut(11, "Allocate temp Vgprs for BN reduction")
+            LastWorkitemDim0 = kernel["SubGroup0"]-1 
+            #TODO: Determine whether the below statement is required or not
+            #kStr += inst("s_mov_b32",sgpr(tmpSgpr2), LastWorkitemDim0,"")
+
+            tmpSgprSubGroup = self.getTmpSgpr(kernel["SubGroup1"]*4 + 4)
+            
+            # Calculation for the channel offset in case of multiple wavefronts
+            tmpVgpr_dpp = self.vgprPool.checkOut(3, "For channel offset calculation")
+            tmpSgpr_dpp = self.getTmpSgpr(1)
+            quotient_dpp = self.vgprPool.checkOut(1)
+            remainder_dpp = self.vgprPool.checkOut(1)
+            dividend_dpp = bcastVgpr+1
+            divisor_dpp = tmpVgpr_dpp
+            kStr += inst("v_mov_b32",vgpr(tmpVgpr_dpp), kernel["SubGroup0"], " Channel offset calculation" )
+            kStr += "DYNAMIC_VECTOR_DIVIDE %s %s %s %s %s %s %s%s" \
+                % ( quotient_dpp, remainder_dpp, dividend_dpp, divisor_dpp, \
+                tmpVgpr_dpp+1, tmpVgpr_dpp+2, tmpSgpr_dpp, self.endLine )
+            kStr += inst("v_cmp_eq_u32", sgpr("SaveExecMask", 2), LastWorkitemDim0, vgpr(remainder_dpp, 1), "Only 1 workitem should pass")
+            #TODO: Determine whether the below statement is required or not
+            #kStr += inst("s_and_saveexec_b64", sgpr(tmpSgpr2+3,2), sgpr(tmpSgpr2+1,2), "Only 1 thread does global write") 
+            kStr += inst("s_mov_b64",sgpr(tmpSgprSubGroup, 2), sgpr("SaveExecMask", 2),"")
+            self.vgprPool.checkIn(tmpVgpr_dpp)
+            self.vgprPool.checkIn(quotient_dpp)
+            self.vgprPool.checkIn(remainder_dpp)
+
+            it = kernel["ThreadTile1"]
+            for rpv in range(0, it):
+              kStr += inst("s_mov_b64",  sgpr(tmpSgprSubGroup+4+2*rpv, 2), sgpr(tmpSgprSubGroup, 2),"Initially all mean writes will happen")
+              kStr += inst("s_mov_b64",  sgpr(tmpSgprSubGroup+4+2*it+2*rpv, 2), sgpr(tmpSgprSubGroup, 2),"Initially all variance writes will happen")
+
+            kStr += inst("s_and_saveexec_b64", sgpr("SaveExecMask",2), sgpr("SaveExecMask",2), \
+                "assert: saved execmask")
+            #TODO: Determine whether the below statment is required or not
+            #kStr += inst("s_branch", "label_%04u"%x1BNConvFusionLabel, "For global write to mean,variance")
+
+            #TODO: Determine whether the below statment is required or not
+            #kStr += "label_%04u:%s"%(x1BNConvFusionLabel, self.endLine)
+            kStr += inst("v_mov_b32", vgpr(tmpVgprBNreduction,1), vgpr(bcastVgpr,1),"")
+            kStr += inst("v_mov_b32", vgpr(tmpVgprBNreduction+1,1), sgpr("StridesC"),"")
+            kStr += inst("v_lshlrev_b32", vgpr(tmpVgprBNreduction+1,1),2,vgpr(tmpVgprBNreduction+1,1),"")
+            kStr += inst("v_mov_b32", vgpr(tmpVgprBNreduction+2,1), vgpr(bcastVgpr,1),"")
+            
+            # Calculation for rewrite attempts 
+            #TODO: Determine whether tmpVgpr4 is required
+            #tmpVgpr4 = self.vgprPool.checkOut(2)
+            tmpSgpr_rewrite_unused = self.getTmpSgpr(1)
+            quotient_rewrite = self.vgprPool.checkOut(1)
+            remainder_rewrite = self.vgprPool.checkOut(1)
+            tmpVgpr_rewrite = self.vgprPool.checkOut(2)
+            dividend_rewrite = tmpVgprBNreduction+2
+            divisor_rewrite = tmpVgprBNreduction+1
+            kStr += "DYNAMIC_VECTOR_DIVIDE %s %s %s %s %s %s %s%s" \
+                % ( quotient_rewrite, remainder_rewrite, dividend_rewrite, divisor_rewrite, \
+                tmpVgpr_rewrite, tmpVgpr_rewrite+1, tmpSgpr_rewrite_unused, self.endLine )
+            kStr += inst("v_mov_b32", vgpr(remainder_rewrite), sgpr("WorkGroup1"), "%s=Sgpr(Workgroup1)"%vgpr(remainder_rewrite) )
+            
+            #TODO: Determine whether the below statment is required or not
+            #kStr += inst("v_add_lshl_u32", vgpr(quotient_rewrite,1), vgpr(quotient_rewrite,1),2, sgpr("Workgroup1"),"")
+            
+            WorkgroupOffsetDim1 = (kernel["SubGroup1"] * kernel["ThreadTile1"])
+            kStr += inst("v_lshlrev_b32", vgpr(remainder_rewrite),hex(log2(WorkgroupOffsetDim1)) , vgpr(remainder_rewrite),"Workgroup dim1 offset")
+            kStr += inst("v_add_u32", vgpr(quotient_rewrite), vgpr(quotient_rewrite), vgpr(remainder_rewrite), "Add Workgroup1 offset to global mean, variance index to get actual channel index")
+            kStr += inst("v_lshlrev_b32", vgpr(quotient_rewrite), 2, vgpr(quotient_rewrite),"")
+            #TODO: Determine whether the below statment is required or not
+            #kStr += "s_waitcnt vmcnt(0)"+self.endLine
+            tmpVgprMeanRewrite = self.vgprPool.checkOut(kernel["SubGroup1"]*2)
+            tmpVgprVarianceRewrite = self.vgprPool.checkOut(kernel["SubGroup1"]*2)
+            kStr += inst("v_mov_b32",vgpr(remainder_rewrite), vgpr(quotient_rewrite), "")
+            WorkitemNextIndex = 4* kernel["SubGroup1"]
+            kStr += "label_%04u:%s"%(x1BNConvFusionLabel, self.endLine)
+            kStr += inst("s_mov_b64",  sgpr(tmpSgprSubGroup+2,2), 0x0, "Initially all writes need to be completed")
+            tmpVgpr_remainder_rewrite = self.vgprPool.checkOut(1)
+
+            kStr += inst("v_mov_b32", vgpr(tmpVgpr_remainder_rewrite,1), vgpr(remainder_rewrite,1), "Move temp address offset" )
+
+            for rpv in range(0,it): 
+              kStr += inst("v_mov_b32", vgpr(tmpVgprMeanRewrite+2*rpv,1), vgpr(meanVgprglobal+rpv,1), "Try writing mean again" )
+              kStr += inst("v_mov_b32", vgpr(tmpVgprVarianceRewrite+2*rpv,1), vgpr(varianceVgprglobal+rpv,1), "Try writing variance again" )
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+4+2*rpv,2), "Should mean write occur" )
+              kStr += inst("buffer_load_dword", vgpr(tmpVgprMeanRewrite+1+2*rpv,1), vgpr(tmpVgpr_remainder_rewrite,1), \
+                          AddrSrdMean, 0, "offen", "offset:%u"%0, extraFields, "load global mean")
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+4+2*it+2*rpv,2), "Should variance write occur" ) 
+              kStr += inst("buffer_load_dword", vgpr(tmpVgprVarianceRewrite+1+2*rpv,1), vgpr(tmpVgpr_remainder_rewrite,1), \
+                          AddrSrdVariance, 0, "offen", "offset:%u"%0, extraFields, "load global variance")
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup,2), "Following instructions need to be executed, Restore exec mask" )
+              kStr += inst("v_add_u32", vgpr(tmpVgpr_remainder_rewrite,1), vgpr(tmpVgpr_remainder_rewrite,1), hex(WorkitemNextIndex), "Do the next load")
+            kStr += "s_waitcnt vmcnt(0)"+self.endLine
+            for rpv in range(0,it): 
+              kStr += inst("v_add_f32",vgpr(tmpVgprMeanRewrite+2*rpv,1), vgpr(tmpVgprMeanRewrite+2*rpv,1), vgpr(tmpVgprMeanRewrite+1+2*rpv,1), "Add workitem mean value" )
+              kStr += inst("v_add_f32",vgpr(tmpVgprVarianceRewrite+2*rpv,1), vgpr(tmpVgprVarianceRewrite+2*rpv,1), vgpr(tmpVgprVarianceRewrite+1+2*rpv,1), "Add workitem variance value" )
+
+            kStr += inst("v_mov_b32", vgpr(tmpVgpr_remainder_rewrite,1), vgpr(remainder_rewrite,1), "Move temp address offset" )
+
+            for rpv in range(0,it):
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+4+2*rpv,2), "Should mean write occur" )  
+              kStr += inst("buffer_atomic_cmpswap", vgpr(tmpVgprMeanRewrite+2*rpv,2), vgpr(tmpVgpr_remainder_rewrite,1), \
+                          AddrSrdMean, 0, "offen", "offset:%u"%0, "glc", extraFields, "store mean")
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+4+2*it+2*rpv,2), "Should variance write occur" )  
+              kStr += inst("buffer_atomic_cmpswap", vgpr(tmpVgprVarianceRewrite+2*rpv,2), vgpr(tmpVgpr_remainder_rewrite,1), \
+                          AddrSrdVariance, 0, "offen", "offset:%u"%0, "glc", extraFields, "store variance")
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup,2), "Following instructions need to be executed, Restore exec mask" )
+              kStr += inst("v_add_u32", vgpr(tmpVgpr_remainder_rewrite,1), vgpr(tmpVgpr_remainder_rewrite,1), hex(WorkitemNextIndex), "Do the next load")
+            kStr += "s_waitcnt vmcnt(0)"+self.endLine
+
+            for rpv in range(0,it):
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+4+2*rpv,2), "Should mean write occur" )
+              kStr += inst("v_cmp_neq_f32",sgpr(tmpSgprSubGroup+4+2*rpv,2), vgpr(tmpVgprMeanRewrite+2*rpv,1),vgpr(tmpVgprMeanRewrite+2*rpv+1,1), "Mean Value read during atomic!= previous value" )
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+4+2*it+2*rpv,2), "Should variance write occur" )
+              kStr += inst("v_cmp_neq_f32",sgpr(tmpSgprSubGroup+4+2*it+2*rpv,2), vgpr(tmpVgprVarianceRewrite+2*rpv,1),vgpr(tmpVgprVarianceRewrite+2*rpv+1,1), "Variance Value read during atomic!= previous value" )
+
+              kStr += inst("s_or_b64", sgpr(tmpSgprSubGroup+2,2),sgpr(tmpSgprSubGroup+2,2),sgpr(tmpSgprSubGroup+4+2*rpv,2), "If mean not written rewrite next time")
+              kStr += inst("s_or_b64", sgpr(tmpSgprSubGroup+2,2),sgpr(tmpSgprSubGroup+2,2),sgpr(tmpSgprSubGroup+4+2*it+2*rpv,2), "If variance not written rewrite next time")
+              kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup,2), "Following instructions needs to be executed, Restore exec mask" )
+
+            kStr += inst("s_mov_b64", "exec", sgpr(tmpSgprSubGroup+2,2), "must try writing mean and variance again" )
+            kStr += inst("s_cbranch_execz", "label_%04u"%endLabel, "jump to end if everything is done")
+            kStr += inst("s_branch", "label_%04u"%x1BNConvFusionLabel, "Try again")
+            
+            # Cleanup all registers
+            self.vgprPool.checkIn(tmpVgprMeanRewrite)
+            self.vgprPool.checkIn(tmpVgprVarianceRewrite)
+            self.vgprPool.checkIn(tmpVgpr2)
+            #self.vgprPool.checkIn(tmpVgpr_rewrite_old)
+            self.vgprPool.checkIn(tmpVgpr_rewrite)
+            self.vgprPool.checkIn(quotient_rewrite)
+            self.vgprPool.checkIn(remainder_rewrite)
+            self.vgprPool.checkIn(tmpVgpr_remainder_rewrite)
+            self.vgprPool.checkIn(tmpVgprBNreduction)
+              
         # TODO - if this is the last tile, don't need to jump to next instruction
         kStr += inst("s_branch", "label_%04u"%endLabel, "jump to end")
 
     # End label
     kStr += "label_%04u:%s"%(endLabel, self.endLine)
+    if kernel["x1BNConvFusionEnable"] > 0:
+      tmpSgpr5 =self.getTmpSgpr(2)
+      kStr += inst("s_mov_b64", sgpr(tmpSgpr5,2), 0xFFFFFFFFFFFFFFFF, "")
+      kStr += inst("s_or_saveexec_b64",sgpr(tmpSgpr5,2),sgpr(tmpSgpr5,2), "")
     self.vgprPool.checkIn(tmpVgpr)
     return kStr
 
@@ -6884,6 +7151,54 @@ class KernelWriterAssembly(KernelWriter):
 
     return kStr
 
+##############################################################################
+  # Batch Normalization reduction phase for 1x1 Conv
+  ##############################################################################
+  def BN_reduction(self, kernel, beta, edge, lsu, batchElements, meanVgprglobal, varianceVgprglobal):
+    kStr = ""
+    elementSumIdx = []                                                         
+    for elementIdx in range(0, len(batchElements)):
+      element = batchElements[elementIdx]
+      d1 = element[0]
+      d0 = element[1]
+      vc1 = element[2]
+      vc0 = element[3]
+      #print "Edge=", edge, element
+      if lsu:
+        sumIdx = self.startVgprValuC + vc0 + d1*kernel["VectorWidth"]
+      else:
+        sumIdx = self.startVgprValuC + vc0 + d0*kernel["VectorWidth"] + vc1*kernel["ThreadTile0"] + d1*kernel["VectorWidth"]*kernel["ThreadTile0"]
+      elementSumIdx.append(sumIdx) # sumIdx is an element idx, need to div//2 for half
+
+    for elementIdx in range(0, len(batchElements)):
+      sumIdx = elementSumIdx[elementIdx]
+      if kernel["ProblemType"]["DataType"].isHalf():
+        if not kernel["ProblemType"]["HighPrecisionAccumulate"]:
+          meanVgpr = meanVgprglobal + sumIdx//(2*kernel["ThreadTile0"])
+          varianceVgpr = varianceVgprglobal + sumIdx//(2*kernel["ThreadTile0"])
+          srcVgpr = sumIdx/2 
+        else:
+          meanVgpr = meanVgprglobal + sumIdx//kernel["ThreadTile0"]
+          varianceVgpr = varianceVgprglobal + kernel["ThreadTile1"] + sumIdx//(kernel["ThreadTile0"])
+          srcVgpr = sumIdx
+          
+      elif kernel["ProblemType"]["DataType"].isSingle():
+        meanVgpr = meanVgprglobal + sumIdx//kernel["ThreadTile0"]
+        varianceVgpr = varianceVgprglobal + sumIdx//(kernel["ThreadTile0"])
+        srcVgpr = sumIdx
+      elif kernel["ProblemType"]["DataType"].isDouble():
+        meanVgpr = meanVgprglobal + 2*sumIdx//kernel["ThreadTile0"]
+        varianceVgpr = varianceVgprglobal + 2*sumIdx//(kernel["ThreadTile0"])
+        srcVgpr = 2*sumIdx
+      if beta == 0:
+            if edge == 0:  
+              kStr += inst("v_add_f32", vgpr(meanVgpr), vgpr(meanVgpr), \
+                            vgpr(srcVgpr), "BN reduction calculate mean")
+              kStr += inst("v_mac_f32", vgpr(varianceVgpr), vgpr(meanVgpr), vgpr(meanVgpr), \
+                            "BN reduction calculate variance")
+              
+    return kStr
+
   ##############################################################################
   ##############################################################################
   def applyAlpha(self, kernel, gwvw, elementSumIdx, elementIdx, tmpS01):
@@ -6922,7 +7237,7 @@ class KernelWriterAssembly(KernelWriter):
   def globalWriteBatch(self, kernel, batchIdx, beta, edge, optStoreAddrVgpr, lsu, atomic, gwvw, atomicW, \
       batchElements, coord0, coord1, addrD, addrC,  \
       numVgprsPerAddr, numVgprsPerDataPerVI, halfDataRegPerVI, tmpVgpr, \
-      batchElementSgprs, numSgprsPerElement, tmpSgpr):
+      batchElementSgprs, numSgprsPerElement, tmpSgpr , meanVgprglobal = None,varianceVgprglobal=None, bcastVgpr=None,customLabel=None):
     kStr = ""
 
     if atomic:
@@ -7633,7 +7948,51 @@ class KernelWriterAssembly(KernelWriter):
           else:
             addr0 = vgpr(addr,2)
             addr1 = ""
+          # Initialize all mean and variance values 
+          if kernel["x1BNConvFusionEnable"] > 0:
+            loop_iter = kernel["ThreadTile1"]
+            if beta == 0:
+              if edge == 0:
+                if batchIdx == 0:
+                  if elementIdx == 0:
+                    tmpSgpr_initialize = self.getTmpSgpr(3)
+                    tmpVgpr_initialize = self.vgprPool.checkOut(2)
+                    for rpv2 in range(0, loop_iter):
+                        kStr += inst("v_mov_b32",vgpr(meanVgprglobal+rpv2), 0,"Initialize mean to 0")
+                        kStr += inst("v_mov_b32",vgpr(varianceVgprglobal+rpv2), 0,"Initialize variance to 0")
+                    kStr += inst("v_mov_b32",vgpr(bcastVgpr,1), 0,"Initialize broadcast address to 0")
+                    kStr += inst("v_mov_b32",vgpr(bcastVgpr+1,1),vgpr("Serial"), " Save Workitem id")
+                    kStr += inst("v_mov_b32",vgpr(tmpVgpr_initialize,1),vgpr("Serial"), "")
+                    quotient_initialize = self.vgprPool.checkOut(1)
+                    remainder_initialize = self.vgprPool.checkOut(1)
+                    tmpVgpr_initialize_unused = self.vgprPool.checkOut(2)
+                    dividend_initialize = tmpVgpr_initialize
+                    kStr += inst("v_mov_b32",vgpr(tmpVgpr_initialize+1,1),kernel["SubGroup0"], "")
+                    divisor_initialize = tmpVgpr_initialize+1
 
+                    
+                    kStr += "DYNAMIC_VECTOR_DIVIDE %s %s %s %s %s %s %s%s" \
+                        % ( quotient_initialize, remainder_initialize, dividend_initialize, divisor_initialize, \
+                        tmpVgpr_initialize_unused, tmpVgpr_initialize_unused+1 , tmpSgpr_initialize, self.endLine )
+                    kStr += inst("v_cmp_eq_u32",sgpr(tmpSgpr_initialize,2),0, vgpr(remainder_initialize), "" )
+                    kStr += inst("s_and_saveexec_b64",sgpr(tmpSgpr_initialize,2),sgpr(tmpSgpr_initialize,2),"")
+                    kStr += inst("v_mov_b32",vgpr(bcastVgpr,1),vgpr(tmpVgpr+2,1),"")
+                    kStr += inst("s_mov_b64", sgpr(tmpSgpr_initialize,2), 0xFFFFFFFFFFFFFFFF, "")
+                    kStr += inst("s_or_saveexec_b64",sgpr(tmpSgpr_initialize,2),sgpr(tmpSgpr_initialize,2), "")
+                    
+                    # TODO: Check if the following three instructions are required
+                    extraFields = "" 
+                    kStr += inst("//buffer_store_dword", vgpr(sumIdx/2, rpv), addr0, \
+                          addr1, 0, "offen", "offset:%u"%0, extraFields, "This is the first store")
+                    kStr += inst("//v_mov_b32", vgpr(bcastVgpr), addr0, "Transfer base address")
+                    kStr += inst("//s_branch", "label_%04u"%customLabel, "jump to end")
+                    
+                    kStr += "label_%04u:%s"%(customLabel, self.endLine)
+                    self.vgprPool.checkIn(quotient_initialize)
+                    self.vgprPool.checkIn(remainder_initialize)
+                    self.vgprPool.checkIn(tmpVgpr_initialize)
+                    self.vgprPool.checkIn(tmpVgpr_initialize_unused)
+              
           useBuffer = kernel["BufferStore"]
           storesIssued += 1
           addrCalc = elementAddr[elementIdx]
@@ -7641,15 +8000,27 @@ class KernelWriterAssembly(KernelWriter):
             kStr += addrCalc.incrementToNextRow("D", optStoreAddrVgpr, tmpS01)
           if kernel["ProblemType"]["DataType"].isHalf():
             if not kernel["ProblemType"]["HighPrecisionAccumulate"]:
+              if kernel["x1BNConvFusionEnable"] > 0:
+                meanVgpr = meanVgprglobal + sumIdx//(2*kernel["ThreadTile0"])
+                varianceVgpr = varianceVgprglobal + sumIdx//(2*kernel["ThreadTile0"])
               kStr += self.chooseGlobalWrite(useBuffer, bps, sumIdx//2, rpv, \
                         addr0, addr1, addrCalc.globalOffset, ntStr, hi16=sumIdx%2)
             else:
+              if kernel["x1BNConvFusionEnable"] > 0:  
+                meanVgpr = meanVgprglobal + sumIdx//kernel["ThreadTile0"]
+                varianceVgpr = varianceVgprglobal + kernel["ThreadTile1"] + sumIdx//(kernel["ThreadTile0"])
               kStr += self.chooseGlobalWrite(useBuffer, bps, sumIdx, rpv, \
                         addr0, addr1, addrCalc.globalOffset, ntStr, hi16=0)
           elif kernel["ProblemType"]["DataType"].isInt8x4() or kernel["ProblemType"]["DataType"].isSingle():
+            if kernel["x1BNConvFusionEnable"] > 0:  
+              meanVgpr = meanVgprglobal + sumIdx//kernel["ThreadTile0"]
+              varianceVgpr = varianceVgprglobal + sumIdx//(kernel["ThreadTile0"])
             kStr += self.chooseGlobalWrite(useBuffer, bps, sumIdx, rpv, \
                       addr0, addr1, addrCalc.globalOffset, ntStr)
           elif kernel["ProblemType"]["DataType"].isDouble():
+            if kernel["x1BNConvFusionEnable"] > 0:    
+              meanVgpr = meanVgprglobal + 2*sumIdx//kernel["ThreadTile0"]
+              varianceVgpr = varianceVgprglobal + 2*sumIdx//(kernel["ThreadTile0"])
             kStr += self.chooseGlobalWrite(useBuffer, bps, sumIdx*2, rpv, \
                       addr0, addr1, addrCalc.globalOffset, ntStr)
 

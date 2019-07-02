@@ -35,7 +35,9 @@
 #include <unistd.h>
 #include <set>
 #include <assert.h>
-
+#if x1BNConvFusionEnable
+  #define size_param 1024
+#endif
 TensileTimer timer;
 TensileTimer apiTimer;
 std::ofstream file;
@@ -442,6 +444,9 @@ bool callLibrary(
     currentMemorySizeC *= strides[i];
   }
   size_t sizeToCopy = currentMemorySizeC*bytesPerElement[dataTypeIdx];
+  #if x1BNConvFusionEnable
+    size_t sizeToCopy_bn = size_param*bytesPerElement[dataTypeIdx];
+  #endif 
 #if Tensile_RUNTIME_LANGUAGE_OCL
   status = clEnqueueWriteBuffer(stream, static_cast<cl_mem>(deviceC), CL_TRUE,
       0, sizeToCopy, initialC, 0, NULL, NULL);
@@ -454,6 +459,9 @@ bool callLibrary(
   tensileStatusCheck(status);
   if(!cEqualD)
     status = hipMemcpy(deviceD, initialD, sizeToCopy, hipMemcpyHostToDevice);
+  #if x1BNConvFusionEnable
+      status = hipMemcpy(devicemean, initialmean, sizeToCopy_bn, hipMemcpyHostToDevice);
+  #endif
 #endif
   tensileStatusCheck(status);
 
@@ -518,6 +526,9 @@ bool callLibrary(
 #else
     hipMemcpy(deviceOnHostC, deviceC, sizeToCopy, hipMemcpyDeviceToHost);
     hipMemcpy(deviceOnHostD, deviceD, sizeToCopy, hipMemcpyDeviceToHost);
+    #if x1BNConvFusionEnable
+    hipMemcpy(deviceonHostC, devicemean, sizeToCopy_bn, hipMemcpyDeviceToHost); 
+    #endif
 #endif
 
     if (printTensorC & 0x2) {
@@ -821,6 +832,10 @@ bool benchmarkAllSolutionsForSize(
     DestDataType *initialC,
     DataType *initialA,
     DataType *initialB,
+    #if x1BNConvFusionEnable
+    DataType *initialmean,
+    DataType *initialvariance,
+    #endif
     ComputeDataType alpha,
     ComputeDataType beta,
     DestDataType *referenceD,
@@ -870,7 +885,9 @@ bool benchmarkAllSolutionsForSize(
 
   size_t sizeToCopyD = currentMemorySizeD*bytesPerElement[dataTypeIdx];
   size_t sizeToCopyC = currentMemorySizeC*bytesPerElement[dataTypeIdx];
-
+  #if x1BNConvFusionEnable
+    size_t sizeToCopy_bn = size_param*bytesPerElement[dataTypeIdx];
+  #endif 
   file << problemIdx << ", " << sizes[0];
   for (unsigned int i = 1; i < totalIndices[problemTypeIdx]+numIndicesLD; i++) {
     file << ", " << sizes[i];
@@ -997,6 +1014,9 @@ bool benchmarkAllSolutionsForSize(
       tensileStatusCheck(status);
       if(!cEqualD)
         status = hipMemcpy(deviceD, initialD, sizeToCopyD, hipMemcpyHostToDevice);
+      #if x1BNConvFusionEnable
+            status = hipMemcpy(devicemean, initialmean, sizeToCopy_bn, hipMemcpyHostToDevice);
+      #endif
 #endif
       tensileStatusCheck(status);
 
@@ -1019,6 +1039,9 @@ bool benchmarkAllSolutionsForSize(
         hipMemcpy(deviceOnHostC, deviceC, sizeToCopyC, hipMemcpyDeviceToHost);
         if(!cEqualD)
           hipMemcpy(deviceOnHostD, deviceD, sizeToCopyD, hipMemcpyDeviceToHost);
+        #if x1BNConvFusionEnable
+        hipMemcpy(initialmean, devicemean, sizeToCopy_bn, hipMemcpyDeviceToHost);
+        #endif
 #endif
         if (printTensorC & 0x2) {
           std::vector<unsigned int> indexAssignmentsC;
@@ -1322,6 +1345,10 @@ bool benchmarkProblemSizes(
     DestDataType *initialC,
     DataType *initialA,
     DataType *initialB,
+    #if x1BNConvFusionEnable
+      DataType *initialmean,
+      DataType *initialvariance,
+    #endif
     ComputeDataType alpha,
     ComputeDataType beta,
     DestDataType *referenceD,
@@ -1378,9 +1405,15 @@ bool benchmarkProblemSizes(
 
     // benchmark all solutions for this problem size
     double problem_gpu_time_ms;
-    bool invalids = benchmarkAllSolutionsForSize( problemIdx, initialD, initialC,
-        initialA, initialB, alpha, beta, referenceD, referenceC, deviceOnHostD, deviceOnHostC,
-        &problem_gpu_time_ms);
+    #if x1BNConvFusionEnable
+      bool invalids = benchmarkAllSolutionsForSize( problemIdx, initialD, initialC,
+          initialA, initialB, initialmean, initialvariance, alpha, beta, referenceD, referenceC, deviceOnHostD, deviceOnHostC,
+          &problem_gpu_time_ms);
+    #else
+      bool invalids = benchmarkAllSolutionsForSize( problemIdx, initialD, initialC,
+          initialA, initialB, alpha, beta, referenceD, referenceC, deviceOnHostD, deviceOnHostC,
+          &problem_gpu_time_ms);
+    #endif
     if (invalids) returnInvalids = true;
     gpu_time_ms += problem_gpu_time_ms;
     //printf ("gpu_time: %6.2f ms+ %6.2fns\n", gpu_time_ms, problem_gpu_time_ms);
@@ -1462,6 +1495,10 @@ void initData(
     DestDataType **initialC,
     DataType **initialA,
     DataType **initialB,
+    #if x1BNConvFusionEnable
+      DataType **initialmean,
+      DataType **initialvariance,
+    #endif
     ComputeDataType *alpha,
     ComputeDataType *beta,
     DestDataType **referenceD,
@@ -1536,11 +1573,20 @@ void initData(
   std::cout << ".";
   *initialB = new DataType[maxSizeB];
   std::cout << ".";
-
+  #if x1BNConvFusionEnable
+    *initialmean = new DataType[size_param];
+    std::cout << ".";
+    *initialvariance = new DataType[size_param];
+    std::cout << ".";
+  #endif
   // initialize buffers
   initInput("DataInitTypeA", initA, initialA, maxSizeA, Abs);
   initInput("DataInitTypeB", initB, initialB, maxSizeB, AltSign);
   initInput("DataInitTypeC", initC, initialC, maxSizeC, None);
+  #if x1BNConvFusionEnable
+    initInput("DataInitTypemean",0 , initialmean, size_param, Abs);
+    initInput("DataInitTypevariance", 0, initialvariance, size_param, Abs);
+  #endif
   if(!cEqualD)
     initInput("DataInitTypeD", initD, initialD, maxSizeD, None);
 
@@ -1585,6 +1631,13 @@ void initData(
   status = hipMalloc( &deviceB, maxSizeB*bytesPerElement[dataTypeIdx] );
   tensileStatusCheck(status);
   std::cout << ".";
+  #if x1BNConvFusionEnable
+    status = hipMalloc( &devicemean, size_param*bytesPerElement[dataTypeIdx] );
+    tensileStatusCheck(status);
+    std::cout << ".";
+    status = hipMalloc( &devicevariance, size_param*bytesPerElement[dataTypeIdx] );
+    tensileStatusCheck(status);
+  #endif
 #endif
 
   if (!specializeAB) {
@@ -1611,7 +1664,12 @@ void destroyData(
     DestDataType *referenceD,
     DestDataType *referenceC,
     DestDataType *deviceOnHostD,
-    DestDataType *deviceOnHostC) {
+    DestDataType *deviceOnHostC
+    #if x1BNConvFusionEnable
+    ,DataType *initialmean,
+    DataType *initialvariance
+    #endif
+    ) {
 
   delete[] initialC;
   if(!cEqualD)
@@ -1624,7 +1682,10 @@ void destroyData(
   delete[] deviceOnHostC;
   if(!cEqualD)
     delete[] deviceOnHostD;
-
+  #if x1BNConvFusionEnable
+    delete[] initialmean;
+    delete[] initialvariance;
+  #endif
 #if Tensile_RUNTIME_LANGUAGE_OCL
   clReleaseMemObject(static_cast<cl_mem>(deviceC));
   if(!cEqualD)
@@ -1637,6 +1698,10 @@ void destroyData(
     hipFree(deviceD);
   hipFree(deviceA);
   hipFree(deviceB);
+  #if x1BNConvFusionEnable
+    hipFree(devicemean);
+    hipFree(devicevariance);
+  #endif
 #endif
 
 }

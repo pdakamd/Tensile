@@ -333,7 +333,11 @@ def writeSolutionsAndKernels(outputPath, problemTypes, solutions, kernels, kerne
   h = ""
   for problemType in problemTypes:
     #print "p=", problemType
-    argListAll = solutionWriter.getArgList(problemType, True, True, True, True)
+    kernel = kernels[0]
+    if kernel["x1BNConvFusionEnable"] > 0:
+      argListAll = solutionWriter.getArgList(problemType, True, True, True, True, kernel)
+    else:
+            argListAll = solutionWriter.getArgList(problemType, True, True, True, True)      
     # declare TensileSolutionPointer_ProblemType
     h += "\n// solution pointer\n"
     h += "typedef TensileStatus (*TensileSolutionPointer_%s)(\n" % problemType

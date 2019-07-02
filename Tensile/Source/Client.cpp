@@ -65,10 +65,17 @@ int main( int argc, char *argv[] ) {
 
 
 #if Tensile_CLIENT_BENCHMARK
-#define TENSILE_CLIENT_CALL_PROBLEM                                     \
-      invalids = benchmarkProblemSizes(initialD, initialC, initialA,    \
-          initialB, alpha, beta, referenceD, referenceC,                \
-          deviceOnHostD, deviceOnHostC);
+#if x1BNConvFusionEnable
+  #define TENSILE_CLIENT_CALL_PROBLEM                                     \
+        invalids = benchmarkProblemSizes(initialD, initialC, initialA,    \
+            initialB, initialmean, initialvariance, alpha, beta, referenceD, referenceC,                \
+            deviceOnHostD, deviceOnHostC);
+#else
+  #define TENSILE_CLIENT_CALL_PROBLEM                                     \
+        invalids = benchmarkProblemSizes(initialD, initialC, initialA,    \
+            initialB, alpha, beta, referenceD, referenceC,                \
+            deviceOnHostD, deviceOnHostC);
+#endif
 #else
 #define TENSILE_CLIENT_CALL_PROBLEM                                     \
       invalids = callLibrary(initialD, initialC, initialA, initialB,    \
@@ -78,25 +85,47 @@ int main( int argc, char *argv[] ) {
           deviceOnHostD, deviceOnHostC);
 #endif
 
-#define TENSILE_CLIENT_CALL_SETUP(Ti, To, Tc)                           \
-    To *initialD;                                                       \
-    To *initialC;                                                       \
-    Ti *initialA;                                                       \
-    Ti *initialB;                                                       \
-    Tc alpha;                                                           \
-    Tc beta;                                                            \
-    To *referenceD;                                                     \
-    To *referenceC;                                                     \
-    To *deviceOnHostD;                                                  \
-    To *deviceOnHostC;                                                  \
-    initData(&initialD, &initialC, &initialA, &initialB, &alpha, &beta, \
-        &referenceD, &referenceC, &deviceOnHostD, &deviceOnHostC);      \
-    for (unsigned int i = 0; i < numBenchmarks; i++) {                  \
-      TENSILE_CLIENT_CALL_PROBLEM                                       \
-    }                                                                   \
-    destroyData(initialD, initialC, initialA, initialB,                 \
-        referenceD, referenceC, deviceOnHostD, deviceOnHostC);
-
+#if x1BNConvFusionEnable
+  #define TENSILE_CLIENT_CALL_SETUP(Ti, To, Tc)                           \
+      To *initialD;                                                       \
+      To *initialC;                                                       \
+      Ti *initialA;                                                       \
+      Ti *initialB;                                                       \
+      To *initialmean;                                                    \
+      To *initialvariance;                                                    \
+      Tc alpha;                                                           \
+      Tc beta;                                                            \
+      To *referenceD;                                                     \
+      To *referenceC;                                                     \
+      To *deviceOnHostD;                                                  \
+      To *deviceOnHostC;                                                  \
+      initData(&initialD, &initialC, &initialA, &initialB, &initialmean, &initialvariance, &alpha, &beta, \
+          &referenceD, &referenceC, &deviceOnHostD, &deviceOnHostC);      \
+      for (unsigned int i = 0; i < numBenchmarks; i++) {                  \
+        TENSILE_CLIENT_CALL_PROBLEM                                       \
+      }                                                                   \
+      destroyData(initialD, initialC, initialA, initialB,                 \
+          referenceD, referenceC, deviceOnHostD, deviceOnHostC, initialmean, initialvariance);
+#else
+  #define TENSILE_CLIENT_CALL_SETUP(Ti, To, Tc)                           \
+      To *initialD;                                                       \
+      To *initialC;                                                       \
+      Ti *initialA;                                                       \
+      Ti *initialB;                                                       \
+      Tc alpha;                                                           \
+      Tc beta;                                                            \
+      To *referenceD;                                                     \
+      To *referenceC;                                                     \
+      To *deviceOnHostD;                                                  \
+      To *deviceOnHostC;                                                  \
+      initData(&initialD, &initialC, &initialA, &initialB, &alpha, &beta, \
+          &referenceD, &referenceC, &deviceOnHostD, &deviceOnHostC);      \
+      for (unsigned int i = 0; i < numBenchmarks; i++) {                  \
+        TENSILE_CLIENT_CALL_PROBLEM                                       \
+      }                                                                   \
+      destroyData(initialD, initialC, initialA, initialB,                 \
+          referenceD, referenceC, deviceOnHostD, deviceOnHostC);
+#endif
   switch(dataTypeEnum) {
 #ifdef Tensile_DATA_TYPE_FLOAT
   case enum_float: {
