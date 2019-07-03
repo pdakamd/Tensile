@@ -85,6 +85,10 @@ TensileStatus tensileReferenceCPU(
     bool complexConjugateB,
     size_t validationStride, // = 1 means do all
     bool useHighPrecisionAccumulate
+    #if x1BNConvFusionEnable
+    , Type *mean,
+    Type *variance
+    #endif
   ) {
   // Only allow high precision accumulate if Type is half
   bool localUseHighPrecisionAccumulate = useHighPrecisionAccumulate && std::is_same<Type, TensileHalf>::value;
@@ -299,6 +303,12 @@ TensileStatus tensileReferenceCPU(
       dataD[serialIdxD] = sumC;
     }
 
+#if x1BNConvFusionEnable
+  int global_chidx = serialIdxC/stridesC[1];
+  double val_sum = (double)sumC;
+  mean[global_chidx] += val_sum;
+  variance[global_chidx] += mean[global_chidx] * mean[global_chidx];
+#endif
     // increment free coord
     // skip = 1, validate everything
     for (size_t i = 0; i < validationStride; i++) {

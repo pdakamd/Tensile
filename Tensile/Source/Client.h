@@ -464,7 +464,9 @@ bool callLibrary(
   #endif
 #endif
   tensileStatusCheck(status);
-
+  #if x1BNConvFusionEnable
+    printf (" Value of mean[0] initially is %f," initialmean[0]);
+  #endif
   size_t numInvalids = 0;
   size_t numChecked = 0;
 
@@ -499,14 +501,22 @@ bool callLibrary(
         validationStride = 0;
       }
     }
-
+#if x1BNConvFusionEnable
+    double *mean = new double [size_param];
+    double *variance = new double [size_param];
+#endif
     // call reference function
     TensileStatus referenceStatus = generatedCallToReferenceCPU(
         userSizes, minStrides, referenceD, referenceC,
         initialA, initialB,
         lda, ldb, ldc, ldd,
         strideA, strideB, strideC, strideD,
-        alpha, beta, useHighPrecisionAccumulate);
+        alpha, beta, useHighPrecisionAccumulate
+        #if x1BNConvFusionEnable
+        , mean,
+        variance
+        #endif
+        );
 
     // call device function
     TensileStatus tensileCallStatus = generatedCallTo_tensile<DataType, DestDataType, ComputeDataType>(userSizes, minStrides,
@@ -530,7 +540,9 @@ bool callLibrary(
     hipMemcpy(deviceonHostC, devicemean, sizeToCopy_bn, hipMemcpyDeviceToHost); 
     #endif
 #endif
-
+  #if x1BNConvFusionEnable
+    std::cout << "Value of mean on the GPU is %d" deviceOnHostC[0];
+  #endif
     if (printTensorC & 0x2) {
       std::vector<unsigned int> indexAssignmentsC;
       for (unsigned  int i = 0; i < numIndicesC[problemTypeIdx]; i++) {
@@ -971,9 +983,27 @@ bool benchmarkAllSolutionsForSize(
         validationStride = 0;
       }
     }
-    generatedCallToReferenceCPU( sizes, minStrides, referenceD, referenceC, initialA, initialB,
-        lda, ldb, ldc, ldd, strideA, strideB, strideC, strideD, alpha, beta, useHighPrecisionAccumulate);
+  #if x1BNConvFusionEnable
+    DataType *mean = new DataType[size_param];
+    DataType *variance = new DataType[size_param];
 
+    for(int i = 0; i< size_param; i++)
+    {
+      mean[i] = 0.0;
+      variance[i] = 0.0;
+    }
+  #endif
+    generatedCallToReferenceCPU( sizes, minStrides, referenceD, referenceC, initialA, initialB,
+        lda, ldb, ldc, ldd, strideA, strideB, strideC, strideD, alpha, beta, useHighPrecisionAccumulate
+        #if x1BNConvFusionEnable
+        ,mean,
+        variance
+        #endif
+        );
+  #if x1BNConvFusionEnable
+    printf("Value of mean[0] on CPU is %f \n", mean[0]);
+    printf("Value of C[0] on CPU is %f \n", referenceC[0]);
+  #endif
   }
 #if Tensile_RUNTIME_LANGUAGE_OCL
     cl_event l_outputEvent[numSyncsPerBenchmark][numEnqueuesPerSync];
@@ -1043,6 +1073,21 @@ bool benchmarkAllSolutionsForSize(
         hipMemcpy(initialmean, devicemean, sizeToCopy_bn, hipMemcpyDeviceToHost);
         #endif
 #endif
+  #if x1BNConvFusionEnable
+        for (int iterator = 0; iterator < 1; iterator++)
+        {
+          printf("The value of mean[%d] on the GPU is %f \n", iterator, initialmean[iterator]);
+
+        }
+        float mean_value = 0.0;
+        int offset_mean = 0;
+        for (int i = offset_mean; i < offset_mean + 100352; i++)
+        {
+          mean_value += deviceOnHostC[i*256];
+          //printf("%f\n", referenceC[i]);
+        }
+        printf("The correct value of mean[0] is %f", mean_value);
+  #endif
         if (printTensorC & 0x2) {
           std::vector<unsigned int> indexAssignmentsC;
           for (unsigned  int i = 0; i < numIndicesC[problemTypeIdx]; i++) {

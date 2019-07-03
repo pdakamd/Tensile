@@ -771,7 +771,12 @@ def writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
   h += "    const unsigned int stride_d,\n"
   h += "    ComputeDataType alpha,\n"
   h += "    ComputeDataType beta,\n"
-  h += "    bool useHighPrecisionAccumulate) {\n"
+  h += "    bool useHighPrecisionAccumulate\n"
+  if kernel["x1BNConvFusionEnable"] > 0:
+    h += "    , DataType *mean,\n"
+    h += "    DataType *variance\n"
+  h += "    ) {\n"
+  
   h += "  return tensileReferenceCPU(\n"
   h += "      referenceD,\n"
   h += "      referenceC,\n"
@@ -797,7 +802,12 @@ def writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
   h += "      complexConjugateA[problemTypeIdx],\n"
   h += "      complexConjugateB[problemTypeIdx],\n"
   h += "      validationStride,\n"
-  h += "      useHighPrecisionAccumulate);\n"
+  h += "      useHighPrecisionAccumulate\n"
+  if kernel["x1BNConvFusionEnable"] > 0:
+    h += "    ,mean,\n"
+    h += "    variance\n"
+  h += "      );\n" 
+    #endif
   h += "};\n"
   h += "\n"
 
