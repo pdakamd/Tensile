@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright (C) 2016 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2016-2019 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -18,6 +18,7 @@
 # IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
 # CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ################################################################################
+
 import os, sys
 from copy import deepcopy
 from copy import copy as shallowcopy
@@ -27,18 +28,15 @@ import filecmp
 import csv
 from subprocess import Popen
 import time
-
-from BenchmarkStructs import BenchmarkProcess
-from Common import globalParameters, HR, pushWorkingPath, popWorkingPath, print1, print2, printExit, printWarning, ensurePath, startTime, ProgressBar
-from SolutionStructs import Solution, ProblemType
-from SolutionWriter import SolutionWriter
-from KernelWriterSource import KernelWriterSource
-from KernelWriterAssembly import KernelWriterAssembly
-from ClientWriter import writeRunScript, writeClientParameters
-from TensileCreateLibrary import writeSolutionsAndKernels, writeCMake
-import YAMLIO
-
-
+from .BenchmarkStructs import BenchmarkProcess
+from .Common import globalParameters, HR, pushWorkingPath, popWorkingPath, print1, print2, printExit, printWarning, ensurePath, startTime, ProgressBar
+from .SolutionStructs import Solution, ProblemType
+from .SolutionWriter import SolutionWriter
+from .KernelWriterSource import KernelWriterSource
+from .KernelWriterAssembly import KernelWriterAssembly
+from .ClientWriter import writeRunScript, writeClientParameters
+from .TensileCreateLibrary import writeSolutionsAndKernels, writeCMake
+from . import YAMLIO
 
 ################################################################################
 # Benchmark Problem Type
@@ -124,8 +122,9 @@ def benchmarkProblemType( problemTypeConfig, problemSizeGroupConfig, \
     ############################################################################
     # Copy Files to Benchmark Source Directory
     ############################################################################
+    stepBaseDir = globalParameters["WorkingPath"]
     sourceDir = \
-      os.path.join(globalParameters["WorkingPath"], "source" )
+      os.path.join(stepBaseDir, "source" )
     ensurePath(sourceDir)
     pushWorkingPath("sourceTmp")
     filesToCopy = [
@@ -138,6 +137,7 @@ def benchmarkProblemType( problemTypeConfig, problemSizeGroupConfig, \
         "MathTemplates.cpp",
         "MathTemplates.h",
         "TensileTypes.h",
+        "tensile_bfloat16.h",
         "KernelHeader.h",
         "ReferenceCPU.h",
         "SolutionHelper.cpp",
@@ -278,9 +278,10 @@ def benchmarkProblemType( problemTypeConfig, problemSizeGroupConfig, \
       print2(HR)
 
     # write benchmarkFiles
-    writeBenchmarkFiles(solutionList, benchmarkStep.problemSizes, \
+    writeBenchmarkFiles(stepBaseDir, solutionList, benchmarkStep.problemSizes, \
         shortName, filesToCopy)
 
+    print1("# Copying files that differ from sourceTmp -> source")
     sourceTmp = globalParameters["WorkingPath"]
     files = os.listdir(sourceTmp)
     for f in files:
@@ -294,7 +295,7 @@ def benchmarkProblemType( problemTypeConfig, problemSizeGroupConfig, \
       elif not os.path.exists(f1) or not filecmp.cmp(f0, f1):
         #print "cp:", f0, f1
         shutil.copy( f0, f1 )
-    #shutil.rmtree( sourceTmp, True )
+    shutil.rmtree( sourceTmp, True )
 
     popWorkingPath() # source
 
@@ -405,7 +406,7 @@ def getResults(resultsFileName, solutions):
 ################################################################################
 # Write Benchmark Files
 ################################################################################
-def writeBenchmarkFiles(solutions, problemSizes, stepName, filesToCopy):
+def writeBenchmarkFiles(stepBaseDir, solutions, problemSizes, stepName, filesToCopy):
   if not globalParameters["MergeFiles"]:
     ensurePath(os.path.join(globalParameters["WorkingPath"], "Solutions"))
     ensurePath(os.path.join(globalParameters["WorkingPath"], "Kernels"))
@@ -438,8 +439,9 @@ def writeBenchmarkFiles(solutions, problemSizes, stepName, filesToCopy):
       kernelMinNaming, kernelSerialNaming)
 
   # write solution, kernels and CMake
+  problemType = solutions[0]["ProblemType"]
   writeSolutionsAndKernels( \
-      globalParameters["WorkingPath"], solutions, kernels, kernelsBetaOnly, \
+      globalParameters["WorkingPath"], [problemType], solutions, kernels, kernelsBetaOnly, \
       solutionWriter, kernelWriterSource, kernelWriterAssembly )
 
   ##############################################################################
@@ -452,8 +454,7 @@ def writeBenchmarkFiles(solutions, problemSizes, stepName, filesToCopy):
 
   forBenchmark = True
   writeClientParameters(forBenchmark, solutions, problemSizes, stepName, \
-      filesToCopy)
-
+      filesToCopy, stepBaseDir)
 
 ################################################################################
 # FrozenDictionary
@@ -615,7 +616,7 @@ class WinningParameterDict:
 
     # only 1 winner, when benchmarking 1 solution
     if len(winners) == 1:
-      hardcodedFrozen = winners.keys()[0]
+      hardcodedFrozen = list(winners.keys())[0]
       winningParameters = winners[hardcodedFrozen][0]
       score = winners[hardcodedFrozen][1]
       matches.append([hardcodedFrozen, winningParameters, score])
@@ -703,7 +704,10 @@ def main( config ):
         (resultsFileBaseFinal, benchmarkErrors) = benchmarkProblemType(problemTypeConfig, \
             problemSizeGroupConfig, problemSizeGroupIdx)
         totalTestFails += benchmarkErrors
-        print "totalTestFails=", totalTestFails
+        
+        print("clientExit=%u %s for %s" %\
+                (totalTestFails, "(ERROR)" if totalTestFails else "(PASS)", \
+                globalParameters["ConfigPath"]))
 
         # Copy Data
         resultsFileBase = resultsFileBaseFinal

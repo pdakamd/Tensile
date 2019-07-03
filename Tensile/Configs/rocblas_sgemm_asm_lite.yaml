@@ -17,8 +17,9 @@ GlobalParameters:
   Device: 0
   KernelTime: True
   PinClocks: True
-  SleepPercent: 200
+  SleepPercent: 0
   DataInitTypeBeta : 0
+  PrintWinnersOnly: 1
 
 BenchmarkProblems:
   ########################################
@@ -55,7 +56,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1, 8]
         - GlobalSplitU: [1]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -88,7 +89,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1, 8]
         - GlobalSplitU: [1, 2, 4, 8]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -117,7 +118,7 @@ BenchmarkProblems:
           - [ 8, 8, 1 ]
         - GlobalSplitU: [1]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -143,7 +144,7 @@ BenchmarkProblems:
           - [ 4, 4, 4 ]
         - GlobalSplitU: [2, 4, 8]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -187,7 +188,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1, 8]
         - GlobalSplitU: [1]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -220,7 +221,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1, 8]
         - GlobalSplitU: [1, 2, 4, 8]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -249,7 +250,7 @@ BenchmarkProblems:
           - [ 8, 8, 1 ]
         - GlobalSplitU: [1]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -275,7 +276,7 @@ BenchmarkProblems:
           - [ 4, 4, 4 ]
         - GlobalSplitU: [2, 4, 8]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -319,7 +320,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1, 8]
         - GlobalSplitU: [1]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -352,7 +353,7 @@ BenchmarkProblems:
         - WorkGroupMapping: [1, 8]
         - GlobalSplitU: [1, 2, 4, 8]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -381,7 +382,7 @@ BenchmarkProblems:
           - [ 8, 8, 1 ]
         - GlobalSplitU: [1]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -407,7 +408,7 @@ BenchmarkProblems:
           - [ 4, 4, 4 ]
         - GlobalSplitU: [2, 4, 8]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -448,10 +449,10 @@ BenchmarkProblems:
         - WorkGroup:
           - [ 16, 16, 1 ]
           - [ 8, 8, 1 ]
-        - WorkGroupMapping: [-1, -4]
+        - WorkGroupMapping: [1, 4]
         - GlobalSplitU: [1]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -481,10 +482,10 @@ BenchmarkProblems:
         - WorkGroup:
           - [ 16, 16, 1 ]
           - [ 8, 8, 4 ]
-        - WorkGroupMapping: [-1, -4]
+        - WorkGroupMapping: [1, 4]
         - GlobalSplitU: [1, 2, 4, 8]
         - DepthU: [ 8, 16, 32 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
         - MacroTile
@@ -505,7 +506,7 @@ BenchmarkProblems:
         - KernelLanguage: ["Source"]
         - PrefetchGlobalRead: [True]
         - PrefetchLocalRead: [True]
-        - WorkGroupMapping: [-1]
+        - WorkGroupMapping: [1]
       ForkParameters:
         - ThreadTile:
           - [ 2, 2 ]
@@ -513,7 +514,7 @@ BenchmarkProblems:
           - [ 8, 8, 1 ]
         - GlobalSplitU: [1]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -531,7 +532,7 @@ BenchmarkProblems:
         - KernelLanguage: ["Assembly"]
         - PrefetchGlobalRead: [True]
         - PrefetchLocalRead: [True]
-        - WorkGroupMapping: [-1]
+        - WorkGroupMapping: [1]
       ForkParameters:
         - ThreadTile:
           - [ 2, 2 ]
@@ -539,7 +540,7 @@ BenchmarkProblems:
           - [ 4, 4, 4 ]
         - GlobalSplitU: [2, 4, 8]
         - DepthU: [ -1 ]
-        - VectorWidth: [-1]
+        - VectorWidth: [-1, 1]
       BenchmarkForkParameters:
       JoinParameters:
       BenchmarkJoinParameters:
@@ -552,11 +553,11 @@ BenchmarkProblems:
 
 LibraryLogic:
 #   ScheduleName: "vega20"
-#   DeviceNames: ["Device 66a0", "Device 66a1", "Device 66a7"]
+#   DeviceNames: ["Device 66a0", "Device 66a1", "Device 66a7", "Device 66af", "Vega 20"]
 #   ArchitectureName: "gfx906"
 
     ScheduleName: "vega10"
-    DeviceNames: ["Device 6863", "Device 6862", "Device 687f", "Device 6860", "Device 6861", "Vega 10 XTX [Radeon Vega Frontier Edition]", "Vega [Radeon RX Vega]"]
+    DeviceNames: ["Device 6863", "Device 6862", "Device 687f", "Device 6860", "Device 6861", "Vega 10 XTX [Radeon Vega Frontier Edition]", "Vega [Radeon RX Vega]", "Vega 10 [Radeon Instinct MI25]"]
     ArchitectureName: "gfx900"
 
 #   ScheduleName: "mi25"

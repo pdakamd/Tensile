@@ -1,5 +1,5 @@
 ################################################################################
-# Copyright (C) 2016 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright (C) 2016-2019 Advanced Micro Devices, Inc. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -18,18 +18,17 @@
 # IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNE-
 # CTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ################################################################################
-import os
-import os.path
-import array
-import csv
-from sys import stdout
-import time
+
+from .Common import print1, print2, HR, printExit, defaultAnalysisParameters, globalParameters, pushWorkingPath, popWorkingPath, assignParameterWithDefault, startTime, ProgressBar, printWarning
+from .SolutionStructs import Solution
+from . import YAMLIO
 
 from copy import deepcopy
-
-from Common import print1, print2, HR, printExit, defaultAnalysisParameters, globalParameters, pushWorkingPath, popWorkingPath, assignParameterWithDefault, startTime, ProgressBar, printWarning
-from SolutionStructs import Solution
-import YAMLIO
+from sys import stdout
+import array
+import csv
+import os
+import time
 
 ################################################################################
 # Analyze Problem Type
@@ -99,15 +98,15 @@ def analyzeProblemType( problemType, problemSizeGroups, inputParameters ):
          line += "% 5.0f" % logicAnalyzer.data[sol + logicAnalyzer.numSolutions*(col + row*numCols)]
         line += "; "
       line += "\n"
-    print line
+    print(line)
 
   ######################################
   # Print solutions used
   print1("# Solutions Used:")
   for i in range(0, len(logicAnalyzer.solutions)):
     s = logicAnalyzer.solutions[i]
-    s.state["SolutionIndex"] = i
-    s.state["SolutionNameMin"] = Solution.getNameMin(s, solutionMinNaming)
+    s["SolutionIndex"] = i
+    s["SolutionNameMin"] = Solution.getNameMin(s, solutionMinNaming)
     print1("(%2u) %s : %s" % (i, \
         Solution.getNameMin(s, solutionMinNaming), \
         Solution.getNameFull(s)))  # this is the right name
@@ -232,7 +231,7 @@ class LogicAnalyzer:
 
     # merge problem sizes from size groups
     #self.numIndices = len(problemSizesList[0].numProblemSizes)
-    self.numIndices = self.problemType["TotalIndices"]
+    self.numIndices = self.problemType["TotalIndices"] + problemType["NumIndicesLD"]
     unifiedProblemSizes = []
     for i in range(0, self.numIndices):
       unifiedProblemSizes.append(set())
@@ -247,23 +246,30 @@ class LogicAnalyzer:
       #print "ProblemSizes", problemSizes.sizes
       self.rangeProblemSizes.update(problemSizes.sizes)
       for rangeSize in problemSizes.ranges:
-        #print "RangeSize", rangeSize
-        sizedIdx = 0
-        mappedIdx = 0
-        for i in range(0, self.numIndices):
-          if rangeSize.indexIsSized[i]:
-            index = rangeSize.indicesSized[sizedIdx]
-            sizedIdx += 1
-          else:
-            index = rangeSize.indicesSized[ \
-              rangeSize.indicesMapped[mappedIdx]]
-            mappedIdx += 1
-          currentSize = index[0]
-          currentStride = index[1]
-          while currentSize <= index[3]:
-            unifiedProblemSizes[i].add(currentSize)
-            currentSize += currentStride
-            currentStride += index[2]
+
+        if globalParameters["ExpandRanges"]: 
+          # Treat ranges as pile of exacts:
+          for rsize in rangeSize.problemSizes:
+            self.exactProblemSizes.add(tuple(rsize))
+        else:
+          # Create the ranges info in the logic file
+          #print "RangeSize", rangeSize
+          sizedIdx = 0
+          mappedIdx = 0
+          for i in range(0, self.numIndices):
+            if rangeSize.indexIsSized[i]:
+              index = rangeSize.indicesSized[sizedIdx]
+              sizedIdx += 1
+            else:
+              index = rangeSize.indicesSized[ \
+                rangeSize.indicesMapped[mappedIdx]]
+              mappedIdx += 1
+            currentSize = index[0]
+            currentStride = index[1]
+            while currentSize <= index[3]:
+              unifiedProblemSizes[i].add(currentSize)
+              currentSize += currentStride
+              currentStride += index[2]
     for i in range(0, len(unifiedProblemSizes)):
       unifiedProblemSizes[i] = sorted(list(unifiedProblemSizes[i]))
     print2("UnifiedProblemSizes: %s" % unifiedProblemSizes)
@@ -357,6 +363,7 @@ class LogicAnalyzer:
   def addFromCSV(self, dataFileName, numSolutions, solutionMap):
 
     # open file
+    print("reading datafile", dataFileName)
     try:
       dataFile = open(dataFileName, "r")
     except IOError:
@@ -399,14 +406,14 @@ class LogicAnalyzer:
               winnerIdx = solutionIdx
               winnerGFlops = gflops
             solutionIdx += 1
-          assert (winnerIdx != -1)
-          if problemSize in self.exactWinners:
-            if winnerGFlops > self.exactWinners[problemSize][1]:
-              #print "update exact", problemSize, "CSV index=", winnerIdx, self.exactWinners[problemSize], "->", solutionMap[winnerIdx], winnerGFlops
+          if winnerIdx != -1:
+            if problemSize in self.exactWinners:
+              if winnerGFlops > self.exactWinners[problemSize][1]:
+                #print "update exact", problemSize, "CSV index=", winnerIdx, self.exactWinners[problemSize], "->", solutionMap[winnerIdx], winnerGFlops
+                self.exactWinners[problemSize] = [solutionMap[winnerIdx], winnerGFlops]
+            else:
               self.exactWinners[problemSize] = [solutionMap[winnerIdx], winnerGFlops]
-          else:
-            self.exactWinners[problemSize] = [solutionMap[winnerIdx], winnerGFlops]
-            #print "new exact", problemSize, "CSV index=", winnerIdx, self.exactWinners[problemSize]
+              #print "new exact", problemSize, "CSV index=", winnerIdx, self.exactWinners[problemSize]
 
         # Range Problem Size
         elif problemSize in self.rangeProblemSizes:
@@ -481,7 +488,7 @@ class LogicAnalyzer:
       else: # no more lis, remainders are exact winner
         break
     stop = time.time()
-    print "removeLeastImportantSolutions elapsed time = %.1f secs" % (stop - start)
+    print("removeLeastImportantSolutions elapsed time = %.1f secs" % (stop - start))
 
 
   ##############################################################################
@@ -497,7 +504,7 @@ class LogicAnalyzer:
     for i in range(0, self.numSolutions):
       solutionImportance.append([i, 0, 0, 0, False])
     problemSizes = [0]*self.numIndices
-    print "problemIndicesForGlobalRange", self.problemIndicesForGlobalRange
+    print("problemIndicesForGlobalRange", self.problemIndicesForGlobalRange)
     for problemIndices in self.problemIndicesForGlobalRange:
       for i in range(0, self.numIndices):
         problemSizes[i] = self.problemIndexToSize[i][problemIndices[i]]
@@ -523,7 +530,7 @@ class LogicAnalyzer:
       #print "keepWinnerSolution adding exact", exactProblem, winnerIdx
       winners.add(winnerIdx)
 
-    print "Winners", winners
+    print("Winners", winners)
     self.pruneSolutions(winners)
 
 
@@ -1080,9 +1087,9 @@ class LogicAnalyzer:
       self.exactWinners[problemSize][0] = \
           solutionMapOldToNew[self.exactWinners[problemSize][0]]
       if self.exactWinners[problemSize][0] == -1:
-        print ("warning: exactWinner[", problemSize, "] == -1")
+        print(("warning: exactWinner[", problemSize, "] == -1"))
       if self.exactWinners[problemSize][0] >= self.numSolutions:
-        print ("warning: exactWinner[", problemSize, "] ")
+        print(("warning: exactWinner[", problemSize, "] "))
 
 
   ##############################################################################
@@ -1246,7 +1253,7 @@ class LogicAnalyzer:
   # TODO, this may depend on transposes
   def recommendedIndexOrder(self):
     order = []
-    for i in range(0, self.numIndices):
+    for i in range(0, self.problemType["TotalIndices"]):
       if i != self.idxU and i != self.idx1 and i != self.idx0:
         order.append(i)
     order.append(self.idxU)

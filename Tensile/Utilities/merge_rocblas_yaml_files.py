@@ -1,11 +1,4 @@
-
-#from copy import deepcopy
-#from Common import print1, print2, printExit, HR, ensurePath
-
-#from SolutionStructs import Solution
-
-#from __init__ import __version__
-
+from __future__ import print_function
 import os
 import sys
 import argparse
@@ -17,11 +10,11 @@ HR = "##########################################################################
 ################################################################################
 
 def printWarning(message):
-  print "Tensile::WARNING: %s" % message
+  print("Tensile::WARNING: %s" % message)
   sys.stdout.flush()
 
 def printExit(message):
-  print "Tensile::FATAL: %s" % message
+  print("Tensile::FATAL: %s" % message)
   sys.stdout.flush()
   sys.exit(-1)
 
@@ -29,8 +22,6 @@ try:
   import yaml
 except ImportError:
   printExit("You must install PyYAML to use Tensile (to parse config files). See http://pyyaml.org/wiki/PyYAML for installation instructions.")
-
-#import YAMLIO
 
 def ensurePath( path ):
   if not os.path.exists(path):
@@ -52,16 +43,67 @@ class LibraryLogic:
         printExit("Cannot open file: %s" % filename )
       data = yaml.load(stream, yaml.SafeLoader)
 
-      self.__set_versionString(data[0]["MinimumRequiredVersion"])
-      self.__set_scheduleName(data[1])
-      self.__set_architectureName(data[2])
-      self.__set_deviceNames(data[3])
-      self.__set_problemType(data[4])
-      self.__set_solutionStates(data[5])
-      self.__set_indexOrder(data[6])
-      self.__set_exactLogic(data[7])
-      self.__set_rangeLogic(data[8])
+      if isinstance(data, list):
+
+        length = len(data)
+
+        if (length > 0):
+          self.__set_versionString(data[0]["MinimumRequiredVersion"])
+        else:
+          self.__set_versionString(None)
+
+        if (length > 1):
+          self.__set_scheduleName(data[1])
+        else:
+          self.__set_scheduleName(None)
+
+        if (length > 2):
+          self.__set_architectureName(data[2])
+        else:
+          self.__set_architectureName(None)
+
+        if (length > 3):
+          self.__set_deviceNames(data[3])
+        else:
+          self.__set_deviceNames(None)
+
+        if (length > 4):
+          self.__set_problemType(data[4])
+        else:
+          self.__set_problemType(None)
+
+        if (length > 5):
+          self.__set_solutionStates(data[5])
+        else:
+          self.__set_solutionStates(None)
+
+        if (length > 6):
+          self.__set_indexOrder(data[6])
+        else:
+          self.__set_indexOrder(None)
+
+        if (length > 7):
+          exactData = data[7]
+          exactList = list()
+          for exact in exactData:
+            size = exact[0]
+            if (len(size) > 4):
+              exactOut = [size[:4],exact[1]]
+              exactList.append(exactOut)
+            else:
+              exactList.append(exact)
+          self.__set_exactLogic(exactList)
+        else:
+          self.__set_exactLogic(None)
+
+        if (length > 8):
+          self.__set_rangeLogic(data[8])
+        else:
+          self.__set_rangeLogic(None)
     
+      else:
+        printExit("Invalid Logic file: %s" % filename)
+
       stream.close()
 
     else:
@@ -162,32 +204,15 @@ class LibraryLogic:
   
     data = []
 
-    if self.versionString is not None:
-      data.append({"MinimumRequiredVersion":self.versionString})
-    
-    if self.scheduleName is not None:
-      data.append(self.scheduleName)     
-    
-    if self.architectureName is not None:
-       data.append(self.architectureName)
-    
-    if self.deviceNames is not None:
-      data.append(self.deviceNames)
-
-    if self.problemType is not None:
-      data.append(self.problemType)
-
-    if self.solutionStates is not None:
-      data.append(self.solutionStates)
-    
-    if self.indexOrder is not None:
-      data.append(self.indexOrder)
-    
-    if self.exactLogic is not None:
-      data.append(self.exactLogic)
-    
-    if self.rangeLogic is not None:
-      data.append(self.rangeLogic)
+    data.append({"MinimumRequiredVersion":self.versionString})
+    data.append(self.scheduleName)     
+    data.append(self.architectureName)
+    data.append(self.deviceNames)
+    data.append(self.problemType)
+    data.append(self.solutionStates)
+    data.append(self.indexOrder)
+    data.append(self.exactLogic)
+    data.append(self.rangeLogic)
 
     if not data:
       printExit("No data to output")
@@ -207,12 +232,24 @@ def MergeTensileLogicFiles(origionalLibraryLogic, exactLibraryLogic):
   solutionList = origionalLibraryLogic.solutionStates
   solutionListExact = exactLibraryLogic.solutionStates
 
+  indexKey = "SolutionIndex"
+  # zero out solution indexes
+  for solution in solutionList:
+    solution[indexKey] = 0
+  
+  for solution in solutionListExact:
+    solution[indexKey] = 0
+
   newSolutionOffset = len(solutionList)
 
   filterdSolutionExactList = []
   replicationMapping = {}
   idx = 0
   idxMapping = newSolutionOffset
+
+  mergedSolutionList = []
+  for solution in solutionList:
+    mergedSolutionList.append(solution)
 
   # construct the mappings from the old exact kernal configurations
   # to their definitions in the merged files
@@ -223,21 +260,16 @@ def MergeTensileLogicFiles(origionalLibraryLogic, exactLibraryLogic):
       # gets mapped to the pre-existing configuration
       idxOrg = solutionList.index(solution)
       replicationMapping[idx] = idxOrg
+
     else:
       filterdSolutionExactList.append(solution)
       # if the solution does not exist in the origional configurations
       # it gets mapped to the new offset
       replicationMapping[idx] = idxMapping
+      mergedSolutionList.append(solution)
       idxMapping += 1
 
     idx += 1
-
-  mergedSolutionList = []
-  for solution in solutionList:
-    mergedSolutionList.append(solution)
-  
-  for solution in solutionListExact:
-    mergedSolutionList.append(solution)
 
   exactLogic = origionalLibraryLogic.exactLogic
   exactLogicExact = exactLibraryLogic.exactLogic
@@ -257,16 +289,22 @@ def MergeTensileLogicFiles(origionalLibraryLogic, exactLibraryLogic):
     
     filteredExactLogicExact.append(exact)
 
-
-  sizeList, _ = zip(*exactLogicExact)
+  sizeList, _ = zip(*filteredExactLogicExact)
 
   mergedExactLogic = []
   for logicMapping in exactLogic:
     if logicMapping[0] not in sizeList:
       mergedExactLogic.append(logicMapping)
 
-  for logicMapping in exactLogicExact:
+  for logicMapping in filteredExactLogicExact:
     mergedExactLogic.append(logicMapping)
+
+  # re index solutions
+  index = 0
+  for solution in mergedSolutionList:
+    solution[indexKey] = index
+    index += 1
+
 
   mergedLibraryLogic.versionString = origionalLibraryLogic.versionString
   mergedLibraryLogic.scheduleName = origionalLibraryLogic.scheduleName
@@ -296,11 +334,11 @@ def ProcessMergeLogicFile(exactFileName, origionalFileName, outputFileName):
 
 def RunMergeTensileLogicFiles():
 
-  print ""
-  print HR
-  print "# Merge Library Logic"
-  print HR
-  print ""
+  print("")
+  print(HR)
+  print("# Merge Library Logic")
+  print(HR)
+  print("")
   
   ##############################################################################
   # Parse Command Line Arguments
@@ -320,7 +358,7 @@ def RunMergeTensileLogicFiles():
   print ("Exact Logic Path: " + exactLogicPath)
   print ("OutputPath: " + outputPath)
 
-  print ""
+  print("")
   ensurePath(outputPath)
   if not os.path.exists(exactLogicPath):
     printExit("LogicPath %s doesn't exist" % exactLogicPath)
@@ -329,15 +367,10 @@ def RunMergeTensileLogicFiles():
       if (os.path.isfile(os.path.join(exactLogicPath, f)) \
       and os.path.splitext(f)[1]==".yaml")]
 
-  #print1("# LibraryLogicFiles:" % exactLogicFiles)
-  #for logicFile in logicFiles:
-  #  print1("#   %s" % logicFile)
-
   for exactLogicFilePath in exactLogicFiles:
     _, fileName = os.path.split(exactLogicFilePath)
-    #print1("#   %s" % fileName)
+    
     origionalLogicFilePath = os.path.join(origionalLogicPath, fileName)
-    #print1("#   %s" % origionalLogicFilePath)
     if os.path.isfile(origionalLogicFilePath):
       
       outputLogicFilePath = os.path.join(outputPath, fileName)
